@@ -77,8 +77,13 @@ describe LevelDB do
 
         # Release snapshot
         snapshot.release
-        db.set_snapshot(snapshot)
+        expect_raises(LevelDB::Error, "Snapshot already released") do
+          db.set_snapshot(snapshot)
+        end
         db.get("aa").should eq nil
+        db.get("bb").should eq "22"
+
+        db.unset_snapshot
 
         db.close
       end
@@ -152,6 +157,100 @@ describe LevelDB do
         db.get("k2").should eq nil
 
         db.close
+      end
+    end
+
+    describe "on stess load" do
+      it "works" do
+        FileUtils.rm_r(TEST_DB) if Dir.exists?(TEST_DB)
+        db = LevelDB::DB.new(TEST_DB)
+        stress_amount = ENV.fetch("BASIC_STRESS_AMOUNT") { 1000 }.to_u64
+        data_length = 64*1024
+        key_length = 1024
+
+        data = "a" * data_length
+        key = "a" * key_length
+
+        stress_amount.times do
+          db.put(key, data)
+          db.get(key).should eq data
+
+          data = data.succ
+          key = key.succ
+        end
+        
+        key = "a" * key_length
+        stress_amount.times do
+          data = db.get(key)
+          data.should_not eq nil
+          if data
+            data.size.should eq data_length
+          end
+          key = key.succ
+        end
+                
+        stress_amount.times do |n|
+          key = "empty:#{n}"
+          db.get(key).should eq nil
+        end
+
+        db.destroy        
+      end
+
+      it "works with snapshots" do
+        FileUtils.rm_r(TEST_DB) if Dir.exists?(TEST_DB)
+        db = LevelDB::DB.new(TEST_DB)
+
+        db.put("aa", "11")
+        db.put("bb", "22")
+
+        base_snapshot = db.create_snapshot
+
+        db.put("cc", "--")
+
+        base_snapshot_with_c = db.create_snapshot
+
+        db.delete("aa")
+        db.get("aa").should eq nil
+        db.get("bb").should eq "22"
+        
+        stress_amount = ENV.fetch("SNAPSHOTS_STRESS_AMOUNT") { 1000 }.to_i
+        snapshots = Array(LevelDB::Snapshot).new
+        data = "aaaaa"
+        stress_amount.times do |n|
+          db.unset_snapshot
+          db.get("cc").should_not eq n.to_s
+          db.put("cc", n.to_s)
+          snp = db.create_snapshot
+          snapshots.push snp
+          db.get("cc").should eq n.to_s
+          db.set_snapshot(snp)
+          db.get("cc").should eq n.to_s
+        end
+
+        n = 0
+        snapshots.each do |snp|
+          db.get("cc").should_not eq n.to_s
+          #db.set_snapshot(snp)
+          db.unset_snapshot
+          db.set_snapshot(snp)
+          db.get("cc").should eq n.to_s
+          n += 1
+        end
+
+        db.set_snapshot(base_snapshot)
+
+        db.get("aa").should eq "11"
+        db.get("bb").should eq "22"
+        db.get("cc").should eq nil
+
+        db.unset_snapshot
+
+        db.set_snapshot(base_snapshot_with_c)
+
+        db.get("cc").should eq "--"
+
+        db.destroy
       end
     end
   end
