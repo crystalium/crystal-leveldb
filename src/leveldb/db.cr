@@ -5,7 +5,7 @@ module LevelDB
     @snapshot : Snapshot?
 
     def initialize(@path : String, create_if_missing : Bool = true, compression : Bool = true)
-      @err_address = 0_u32
+      @err_address = 0_u64
       @err_ptr = pointerof(@err_address).as(Pointer(UInt64))
 
       @options_ptr = LibLevelDB.leveldb_options_create
@@ -40,7 +40,13 @@ module LevelDB
       vallen = 0_u64
       valptr = LibLevelDB.leveldb_get(@db_ptr, @roptions_ptr, key, key.bytesize, pointerof(vallen), @err_ptr)
       check_error!
-      valptr == Pointer(UInt8).null ? nil : String.new(valptr, vallen)
+      if valptr.address == 0 || valptr == Pointer(UInt8).null
+        return nil
+      else
+        valstr = String.new(valptr, vallen)
+        LibLevelDB.leveldb_free(valptr) # Should free after use. See https://github.com/google/leveldb/blob/1.23/include/leveldb/c.h#L93
+        return  valstr
+      end
     end
 
     def [](key)
@@ -86,6 +92,7 @@ module LevelDB
 
     def set_snapshot(snapshot : Snapshot) : Void
       raise Error.new("Snapshot does not match database") unless snapshot.db == self
+      raise Error.new("Snapshot already released") if snapshot.released?
       LibLevelDB.leveldb_readoptions_set_snapshot(@roptions_ptr, snapshot.__ptr)
 
       # Keep reference, so if snapshot is in use, it won't be garbage collected
