@@ -145,8 +145,6 @@ module LevelDB
         ptr = Pointer(UInt8).new(@err_address)
         message = String.new(ptr)
         LibLevelDB.leveldb_free(ptr)
-        @err_address = 0_u64
-        @err_ptr = pointerof(@err_address).as(Pointer(UInt64))
         raise(Error.new(message))
       end
     end

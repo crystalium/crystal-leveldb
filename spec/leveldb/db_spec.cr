@@ -1,4 +1,5 @@
 require "../spec_helper"
+require "wait_group"
 
 describe LevelDB do
   describe "DB" do
@@ -197,7 +198,64 @@ describe LevelDB do
         db.destroy        
       end
 
-      it "works with snapshots" do
+      it "with lots of errors" do
+        db = LevelDB::DB.new(TEST_DB)
+
+        db.opened?.should eq true
+        db.closed?.should eq false
+
+        db.open
+
+        db.put("x", "33")
+        db.get("x").should eq "33"
+
+        db.close
+        db.opened?.should eq false
+        db.closed?.should eq true
+
+        x=1.to_s
+        stress_amount = ENV.fetch("ERRORS_STRESS_AMOUNT") { 10000 }.to_u64
+        stress_amount.times do |n|
+          expect_raises(LevelDB::Error, "is closed") { db.get("x") }
+          expect_raises(LevelDB::Error, "is closed") { db.put("x", "32") }
+          expect_raises(LevelDB::Error, "is closed") { db.delete("x") }
+        end
+      end
+
+      it "works with lots of errors in multiple fibers" do
+        db = LevelDB::DB.new(TEST_DB)
+
+        db.opened?.should eq true
+        db.closed?.should eq false
+          
+        db.open
+  
+        db.put("x", "33")
+        db.get("x").should eq "33"
+  
+        db.close
+        db.opened?.should eq false
+        db.closed?.should eq true
+  
+        fibers_count = ENV.fetch("MT_ERRORS_FIBERS_COUNT") { 16 }.to_i
+        stress_amount = ENV.fetch("MT_ERRORS_STRESS_AMOUNT") { 1000 }.to_i
+        wg = WaitGroup.new(fibers_count)
+        fibers_count.times do
+          spawn do
+            stress_amount.times do
+              expect_raises(LevelDB::Error, "is closed") { db.get("x") }
+              expect_raises(LevelDB::Error, "is closed") { db.put("x", "32") }
+              expect_raises(LevelDB::Error, "is closed") { db.delete("x") }
+            end
+          ensure
+            wg.done
+          end
+        end    
+
+        wg.wait
+      end
+
+      it "with snapshots" do
         FileUtils.rm_r(TEST_DB) if Dir.exists?(TEST_DB)
         db = LevelDB::DB.new(TEST_DB)
 
@@ -231,7 +289,6 @@ describe LevelDB do
         n = 0
         snapshots.each do |snp|
           db.get("cc").should_not eq n.to_s
-          #db.set_snapshot(snp)
           db.unset_snapshot
           db.set_snapshot(snp)
           db.get("cc").should eq n.to_s
